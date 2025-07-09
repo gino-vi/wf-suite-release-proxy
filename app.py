@@ -76,6 +76,7 @@ def home():
         'repository': f'{REPO_OWNER}/{REPO_NAME}',
         'endpoints': {
             '/releases': 'Get available releases',
+            '/releases/download/<tag_name>/<asset_name>': 'Download release asset',
             '/health': 'Health check'
         }
     })
@@ -191,6 +192,89 @@ def health_check():
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
+
+@app.route('/releases/download/<tag_name>/<asset_name>')
+@rate_limit(max_requests_per_minute=10)  # Lower rate limit for downloads
+def download_release_asset(tag_name, asset_name):
+    """Download a release asset using GitHub token authentication"""
+    try:
+        # Validate GitHub token
+        if not GITHUB_TOKEN:
+            logger.error("GitHub token not configured")
+            return jsonify({'error': 'Service configuration error'}), 500
+        
+        # Validate asset name (only allow .exe files)
+        if not asset_name.endswith('.exe'):
+            logger.warning(f"Invalid asset requested: {asset_name}")
+            return jsonify({'error': 'Only .exe files are allowed'}), 400
+        
+        # Setup headers for GitHub API
+        headers = {
+            'Authorization': f'token {GITHUB_TOKEN}',
+            'Accept': 'application/octet-stream',
+            'User-Agent': 'WF-Suite-Release-Proxy/1.0'
+        }
+        
+        # Construct GitHub download URL
+        download_url = f'https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/assets'
+        
+        # First, get the release to find the asset ID
+        release_url = f'https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/tags/{tag_name}'
+        logger.info(f"Fetching release info for {tag_name}")
+        
+        release_response = requests.get(release_url, headers={
+            'Authorization': f'token {GITHUB_TOKEN}',
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'WF-Suite-Release-Proxy/1.0'
+        }, timeout=10)
+        release_response.raise_for_status()
+        
+        release_data = release_response.json()
+        
+        # Find the asset ID for the requested file
+        asset_id = None
+        for asset in release_data.get('assets', []):
+            if asset['name'] == asset_name:
+                asset_id = asset['id']
+                break
+        
+        if not asset_id:
+            logger.warning(f"Asset {asset_name} not found in release {tag_name}")
+            return jsonify({'error': 'Asset not found'}), 404
+        
+        # Download the asset using GitHub API
+        asset_url = f'https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/assets/{asset_id}'
+        logger.info(f"Downloading asset {asset_name} from {asset_url}")
+        
+        def generate():
+            """Stream the file content"""
+            with requests.get(asset_url, headers=headers, stream=True, timeout=30) as response:
+                response.raise_for_status()
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+        
+        # Get file size for Content-Length header
+        asset_size = next((asset['size'] for asset in release_data.get('assets', []) if asset['name'] == asset_name), 0)
+        
+        # Stream the file back to the client
+        from flask import Response
+        return Response(
+            generate(),
+            mimetype='application/octet-stream',
+            headers={
+                'Content-Disposition': f'attachment; filename="{asset_name}"',
+                'Content-Length': str(asset_size) if asset_size > 0 else None
+            }
+        )
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"GitHub API request failed: {e}")
+        return jsonify({'error': 'Failed to download from GitHub'}), 502
+    
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        return jsonify({'error': 'Download failed'}), 500
 
 @app.errorhandler(404)
 def not_found(error):
