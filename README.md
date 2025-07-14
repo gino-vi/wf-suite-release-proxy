@@ -1,6 +1,6 @@
 # WF Suite Release Proxy
 
-A lightweight Flask service that provides public access to GitHub releases from a private repository without exposing source code.
+A lightweight Flask service that provides public access to GitHub releases from a private repository.
 
 ## Quick Start
 
