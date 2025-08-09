@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "name": "wf-suite-release-proxy-worker",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "wrangler": "^3.60.0"
+  }
+}
